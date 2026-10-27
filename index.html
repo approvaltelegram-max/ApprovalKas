@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <title>Approval Pengeluaran Kas THN</title>
+  <style>
+    :root { --bg: var(--tg-theme-bg-color, #f4f6f8); --fg: var(--tg-theme-text-color, #17212b); --muted: var(--tg-theme-hint-color, #718096); --card: var(--tg-theme-secondary-bg-color, #fff); --accent: var(--tg-theme-button-color, #2481cc); }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 18px 16px 30px; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, -apple-system, sans-serif; }
+    main { max-width: 560px; margin: 0 auto; }
+    h1 { margin: 4px 0 6px; font-size: 22px; }
+    .intro { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+    form, .card { padding: 18px; border-radius: 16px; background: var(--card); }
+    label { display: block; margin: 0 0 14px; font-weight: 600; font-size: 14px; }
+    input, select, textarea { display: block; width: 100%; margin-top: 6px; padding: 12px; border: 1px solid #ccd3dc; border-radius: 10px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 400; }
+    textarea { min-height: 88px; resize: vertical; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    button { display: block; width: 100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 11px; background: var(--accent); color: var(--tg-theme-button-text-color, #fff); font: inherit; font-weight: 700; }
+    button:disabled { opacity: .55; }
+    #message, #state-message { margin: 14px 0 0; font-size: 14px; }
+    #message.error, .error { color: #d23f31; }
+    #message.success { color: #16834a; }
+    [hidden] { display: none !important; }
+    @media (max-width: 420px) { .grid { grid-template-columns: 1fr; gap: 0; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">Pengajuan Pengeluaran Uang Kas</h1>
+    <p class="intro" id="intro">Isi data pengeluaran, lalu periksa sebelum dikirim untuk persetujuan.</p>
+
+    <form id="request-form" hidden>
+      <label>Nama pemohon<input name="name" maxlength="100" required autocomplete="name"></label>
+      <label>Kategori pengeluaran<input name="category" maxlength="100" required placeholder="Contoh: Operasional, konsumsi, transportasi"></label>
+      <label>Penerima/vendor<input name="recipient" maxlength="150" required placeholder="Nama penerima uang atau vendor"></label>
+      <label>Uraian pengeluaran<textarea name="description" maxlength="1000" required placeholder="Jelaskan keperluan pengeluaran"></textarea></label>
+      <label>Jumlah pengeluaran (Rp)<input name="amount" type="number" min="1" step="1" required inputmode="numeric" placeholder="Contoh: 150000"></label>
+      <button id="submit-request" type="button">Kirim Pengajuan</button>
+    </form>
+
+    <form id="report-form" hidden>
+      <p class="intro">Pilih format dan rentang laporan. File akan dikirim ke grup.</p>
+      <label>Format laporan<select name="fileFormat" required><option value="xlsx">Excel (.xlsx)</option><option value="pdf">PDF (.pdf)</option></select></label>
+      <label>Jenis rentang<select id="range-type" name="rangeType"><option value="month">Rentang bulan</option><option value="date">Rentang tanggal</option></select></label>
+      <div class="grid" id="month-fields">
+        <label>Bulan awal<input id="start-month" name="startMonth" type="month" required></label>
+        <label>Bulan akhir<input id="end-month" name="endMonth" type="month" required></label>
+      </div>
+      <div class="grid" id="date-fields" hidden>
+        <label>Tanggal awal<input id="start-date" name="startDate" type="date"></label>
+        <label>Tanggal akhir<input id="end-date" name="endDate" type="date"></label>
+      </div>
+      <button id="submit-report" type="button">Kirim Laporan</button>
+    </form>
+
+    <section id="state-card" class="card" hidden><p id="state-message"></p></section>
+    <p id="message" role="status" aria-live="polite"></p>
+    <iframe name="transport-target" id="transport-target" title="Pengiriman permintaan" hidden></iframe>
+    <form id="transport" method="post" enctype="application/x-www-form-urlencoded" target="transport-target" hidden>
+      <input name="telegramMiniAppAction" id="action-field">
+      <input name="initData" id="init-data">
+      <input name="formData" id="form-data">
+      <input name="nonce" id="nonce-field">
+    </form>
+  </main>
+  <script>
+    // Ganti dengan URL Web App Apps Script yang berakhir /exec.
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-on_-4ekt9kglVtUcM9eqGIHtWAuYrodVWWpvDn-_IcMwG1WOLsdWUFTk7q4IzB_E-A/exec';
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) { tg.ready(); tg.expand(); }
+    const requestForm = document.getElementById('request-form');
+    const reportForm = document.getElementById('report-form');
+    const stateCard = document.getElementById('state-card');
+    const stateMessage = document.getElementById('state-message');
+    const message = document.getElementById('message');
+    const transport = document.getElementById('transport');
+    const frame = document.getElementById('transport-target');
+    let activeNonce = '';
+    let awaiting = false;
+    let activeButton = null;
+
+    function nonce() {
+      if (crypto && crypto.getRandomValues) return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+      return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 14);
+    }
+    function setMessage(text, type) { message.textContent = text || ''; message.className = type || ''; }
+    function setState(text, error) {
+      requestForm.hidden = true; reportForm.hidden = true; stateCard.hidden = false;
+      stateMessage.textContent = text; stateMessage.className = error ? 'error' : '';
+    }
+    function post(action, data, button) {
+      if (!tg || !tg.initData || !tg.initDataUnsafe || !tg.initDataUnsafe.user) {
+        setMessage('Data akun Telegram tidak tersedia. Tutup Mini App lalu buka kembali dari menu bot.', 'error');
+        return;
+      }
+      if (APPS_SCRIPT_URL.indexOf('/exec') < 0) {
+        setMessage('URL Web App Apps Script belum diatur di index.html.', 'error'); return;
+      }
+      activeNonce = nonce(); awaiting = true; activeButton = button;
+      if (button) { button.disabled = true; button.textContent = 'Memproses…'; }
+      setMessage(action === 'getMyFlow' ? '' : 'Mengirim permintaan…');
+      document.getElementById('action-field').value = action;
+      document.getElementById('init-data').value = tg.initData;
+      document.getElementById('form-data').value = JSON.stringify(data || {});
+      document.getElementById('nonce-field').value = activeNonce;
+      transport.action = APPS_SCRIPT_URL;
+      transport.submit();
+      setTimeout(() => { if (awaiting) finishError('Belum ada jawaban dari server. Periksa grup sebelum mencoba mengirim ulang.'); }, 20000);
+    }
+    frame.addEventListener('load', () => { if (awaiting) pollResult(activeNonce, 0); });
+    function pollResult(id, attempt) {
+      if (!awaiting || id !== activeNonce) return;
+      const name = 'onKasResult_' + Date.now() + '_' + attempt;
+      const script = document.createElement('script');
+      let cleaned = false;
+      const cleanup = () => { if (cleaned) return; cleaned = true; delete window[name]; script.remove(); };
+      window[name] = response => {
+        cleanup();
+        if (!response || !response.ready) {
+          if (attempt < 12) setTimeout(() => pollResult(id, attempt + 1), 400);
+          else finishError('Server belum mengirim konfirmasi. Periksa grup terlebih dahulu.');
+          return;
+        }
+        awaiting = false;
+        const result = response.result || {};
+        if (!result.ok) { finishError(result.error || 'Permintaan gagal diproses.'); return; }
+        if (result.flow) {
+          if (result.flow.mode === 'pending') setState('Pengajuan ' + result.flow.requestId + ' sedang menunggu persetujuan. Pengajuan baru tersedia setelah keputusan approver.', false);
+          else { stateCard.hidden = true; requestForm.hidden = false; }
+        } else if (result.requestId) {
+          setMessage('Pengajuan ' + result.requestId + ' berhasil dikirim ke grup untuk persetujuan.', 'success');
+          requestForm.reset();
+          if (tg) setTimeout(() => tg.close(), 1800);
+        } else if (result.report) {
+          setMessage('Laporan berhasil dikirim ke grup (' + result.report.count + ' data).', 'success');
+          if (tg) setTimeout(() => tg.close(), 1800);
+        }
+        resetButton();
+      };
+      script.onerror = () => {
+        cleanup();
+        if (attempt < 12) setTimeout(() => pollResult(id, attempt + 1), 500);
+        else finishError('Tidak dapat membaca jawaban server. Pastikan URL deployment /exec benar.');
+      };
+      script.src = APPS_SCRIPT_URL + '?action=result&nonce=' + encodeURIComponent(id) + '&callback=' + encodeURIComponent('window.' + name) + '&_=' + Date.now();
+      document.head.appendChild(script);
+    }
+    function resetButton() {
+      if (!activeButton) return;
+      activeButton.disabled = false;
+      activeButton.textContent = activeButton.id === 'submit-report' ? 'Kirim Laporan' : 'Kirim Pengajuan';
+      activeButton = null;
+    }
+    function finishError(text) { awaiting = false; setMessage(text, 'error'); resetButton(); }
+
+    document.getElementById('submit-request').addEventListener('click', event => {
+      if (!requestForm.reportValidity()) return;
+      post('submitRequest', Object.fromEntries(new FormData(requestForm).entries()), event.currentTarget);
+    });
+    document.getElementById('submit-report').addEventListener('click', event => {
+      if (!reportForm.reportValidity()) return;
+      post('getReport', Object.fromEntries(new FormData(reportForm).entries()), event.currentTarget);
+    });
+    const rangeType = document.getElementById('range-type');
+    function syncRangeFields() {
+      const month = rangeType.value === 'month';
+      document.getElementById('month-fields').hidden = !month;
+      document.getElementById('date-fields').hidden = month;
+      document.getElementById('start-month').required = month;
+      document.getElementById('end-month').required = month;
+      document.getElementById('start-date').required = !month;
+      document.getElementById('end-date').required = !month;
+    }
+    rangeType.addEventListener('change', syncRangeFields);
+    syncRangeFields();
+    const now = new Date();
+    const currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const today = currentMonth + '-' + String(now.getDate()).padStart(2, '0');
+    document.getElementById('start-month').value = currentMonth;
+    document.getElementById('end-month').value = currentMonth;
+    document.getElementById('start-date').value = currentMonth + '-01';
+    document.getElementById('end-date').value = today;
+
+    const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) ||
+      (tg && tg.initData ? new URLSearchParams(tg.initData).get('start_param') : '');
+    if (startParam === 'report') {
+      document.getElementById('title').textContent = 'Tarik Laporan Pengeluaran Kas';
+      document.getElementById('intro').textContent = 'Pilih format file dan periode laporan.';
+      reportForm.hidden = false;
+    } else if (['flow', 'group', 'private'].includes(startParam)) {
+      setState('Memeriksa status pengajuan…', false);
+      post('getMyFlow', {}, null);
+    } else {
+      setState('Buka Mini App melalui tombol “Buat Pengajuan Kas” pada menu bot.', true);
+    }
+  </script>
+</body>
+</html>
