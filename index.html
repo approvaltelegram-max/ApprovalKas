@@ -34,7 +34,15 @@
 
     <form id="request-form" hidden>
       <label>Nama pemohon<input name="name" maxlength="100" required autocomplete="name"></label>
-      <label>Kategori pengeluaran<input name="category" maxlength="100" required placeholder="Contoh: Operasional, konsumsi, transportasi"></label>
+      <label>Kategori pengeluaran
+        <select name="category" required>
+          <option value="">Pilih kategori pengeluaran</option>
+          <option value="Operasional">Operasional</option>
+          <option value="Entertainment">Entertainment</option>
+          <option value="Transportasi">Transportasi</option>
+          <option value="Lain-lain">Lain-lain</option>
+        </select>
+      </label>
       <label>Penerima/vendor<input name="recipient" maxlength="150" required placeholder="Nama penerima uang atau vendor"></label>
       <label>Uraian pengeluaran<textarea name="description" maxlength="1000" required placeholder="Jelaskan keperluan pengeluaran"></textarea></label>
       <label>Jumlah pengeluaran (Rp)<input name="amount" type="number" min="1" step="1" required inputmode="numeric" placeholder="Contoh: 150000"></label>
